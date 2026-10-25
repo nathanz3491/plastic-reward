@@ -47,6 +47,25 @@ It writes `summary.json` (mean ± SE per arm, with a paired difference against
 external-only), `logs.npz` and `stage1.png`. It runs on CPU, but a GPU is much
 faster.
 
+## Stage 2: evolving the rule
+
+```bash
+.venv/Scripts/python run_stage2.py --out runs/stage2
+```
+
+The run has four steps:
+1. **Evolution.** A population of 16 random taste rules, each scored on
+   survival over 3 lifetimes in the delayed-poison world, for 25 generations.
+2. **Random search** over the same rule family, on the same budget.
+3. **Champions.** The finalists of each search are re-measured on fresh
+   lifetimes.
+4. **Held-out test.** The champions go up against external-only and the
+   hand-set rule on 16 fresh lifetimes, at the trained delay and at unseen
+   ones.
+
+It takes about 75 minutes on an RTX 4090 and writes `history.json`,
+`champions.json`, `test.json` and `stage2.png`.
+
 ## Test
 
 ```bash

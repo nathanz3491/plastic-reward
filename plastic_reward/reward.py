@@ -26,6 +26,7 @@ class Gene(NamedTuple):
   pos: jax.Array     # () sensitivity to good evidence
   neg: jax.Array     # () sensitivity to bad evidence
   decay: jax.Array   # () per batch, how much old evidence is kept (0..1)
+  lam: jax.Array     # () how loud taste is next to survival (x Config.lam)
 
 
 class RewardState(NamedTuple):
@@ -35,10 +36,10 @@ class RewardState(NamedTuple):
 
 
 def make_gene(n_events, w0=0.0, alpha=0.0, rho=0.0, pos=1.0, neg=1.0,
-              decay=1.0):
+              decay=1.0, lam=1.0):
   f = lambda v: jnp.asarray(v, jnp.float32)
   return Gene(jnp.broadcast_to(f(w0), (n_events,)), f(alpha), f(rho), f(pos),
-              f(neg), f(decay))
+              f(neg), f(decay), f(lam))
 
 
 def init(gene):

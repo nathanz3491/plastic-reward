@@ -6,6 +6,27 @@ All notable changes are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Stage 2: evolution of the taste rule** (`plastic_reward/evolve.py`,
+  `run_stage2.py`).
+  - A genome is 7 numbers decoded into a Gene: birth taste, learning speed,
+    pull back, weight of good and of bad evidence, forgetting, loudness.
+  - Fitness is mean lifespan over a lifetime, never the agent's own taste.
+    Every genome in a generation meets the same fresh lifetimes, and elites
+    are re-measured each generation.
+  - It runs with a random-search control on the same budget, re-measures the
+    finalists on fresh lifetimes, then holds out a test against external-only
+    and the hand-set rule, at the training delay (15) and unseen delays (0,
+    8, 25).
+  - Taste loudness moved into the Gene (`lam`, multiplied by `Config.lam`),
+    so evolution can tune it.
+  - **First result** (`docs/results-stage2.md`):
+    - Evolution beats random search.
+    - It rediscovers the lopsided rule unprompted: the bad/good weight median
+      rose from 1.4 to about 5-8, and memory kept fell from 0.88 to 0.26.
+    - The evolved champion beats external-only by +17 lifespan at the trained
+      delay and +20 at an unseen longer one, winning 16 of 16 lifetimes both
+      times.
+    - It is slightly worse when poison is instant.
 - **"Once bitten" taste rule** (`averse1` / `averse3` arms): bad evidence
   counts 5× and memory fades fast (decay 0.5).
   - With poison 15 steps late, lifespan at end of life is 87 against 63 for

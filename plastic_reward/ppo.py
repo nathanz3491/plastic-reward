@@ -172,7 +172,7 @@ def train_lifetime(cfg, gene, key):
     c, b = rollout(c)
     _, _, last_val = net(c['params'], c['h'], c['obs'], c['done'])
     r_int = R.intrinsic(c['rs'].w, b['touched'])
-    rew = cfg.reward_scale * (b['reward'] + cfg.lam * r_int)
+    rew = cfg.reward_scale * (b['reward'] + cfg.lam * gene.lam * r_int)
     adv, ret = gae(cfg, rew, b['value'], b['done'], last_val)
     key, k_ppo = jax.random.split(c['key'])
     params, opt_state = ppo(c['params'], c['opt'], h0, b, adv, ret, k_ppo)
