@@ -35,6 +35,7 @@ MAX_LEN = 200
 N_ACTIONS = 5         # stay, up, down, left, right
 MOVES = jnp.array([[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]], jnp.int32)
 OBS_DIM = 4 * VIEW * VIEW + 2
+QLEN = 32             # longest supported poison delay
 OBJ_TYPE = jnp.repeat(jnp.arange(N_TYPES, dtype=jnp.int32), PER_TYPE)
 
 
@@ -50,6 +51,7 @@ class State(NamedTuple):
   hp: jax.Array         # ()
   t_ep: jax.Array       # () steps in this episode
   t_life: jax.Array     # () steps in this lifetime
+  queue: jax.Array      # (QLEN,) poison damage still to land, by steps ahead
 
 
 def sample_lifetime(key, flip_lo, flip_hi):
@@ -75,7 +77,8 @@ def reset(key, t_life=0):
   idx = jax.random.permutation(key, GRID * GRID)[:N_OBJ + 1]
   cells = _cells(idx)
   return State(cells[0], cells[1:], jnp.int32(H_MAX), jnp.int32(HP_MAX),
-               jnp.int32(0), jnp.asarray(t_life, jnp.int32))
+               jnp.int32(0), jnp.asarray(t_life, jnp.int32),
+               jnp.zeros((QLEN,), jnp.int32))
 
 
 def observe(state):
@@ -93,13 +96,19 @@ def observe(state):
       jnp.array([state.hunger / H_MAX, state.hp / HP_MAX], jnp.float32)])
 
 
-def step(key, state, action, life):
+def step(key, state, action, life, delay=0):
   """One step; auto-resets the episode on death or timeout.
+
+  ``delay`` (static, 0..QLEN): poison damage lands that many steps after the
+  poison is eaten, the way food poisoning arrives hours after the meal. With a
+  delay, a touch's consequence is no longer immediate, so a fast internal
+  judgement of what is worth touching has something to add.
 
   Returns obs, state, reward, done, terminal, touched (N_TYPES,) one-hot of the
   type stepped on, and role (N_TYPES,) one-hot of that type's role at the time
   -- the role is for logging only and must never reach the agent.
   """
+  assert 0 <= delay <= QLEN, delay
   k_spawn, k_reset = jax.random.split(key)
   pos = jnp.clip(state.pos + MOVES[action], 0, GRID - 1)
   hit = jnp.all(state.obj_pos == pos, -1)                      # (N_OBJ,)
@@ -110,7 +119,14 @@ def step(key, state, action, life):
   is_food = touched_any & (role == FOOD)
   is_poison = touched_any & (role == POISON)
   hunger = jnp.minimum(state.hunger - 1 + jnp.where(is_food, FOOD_GAIN, 0), H_MAX)
-  hp = state.hp - jnp.where(is_poison, POISON_DMG, 0)
+  dmg = jnp.where(is_poison, POISON_DMG, 0)
+  queue = jnp.concatenate([state.queue[1:], jnp.zeros((1,), jnp.int32)])
+  if delay:
+    landed = state.queue[0]
+    queue = queue.at[delay - 1].add(dmg)
+  else:
+    landed = state.queue[0] + dmg
+  hp = state.hp - landed
 
   # The consumed object reappears on a random free cell (not under the agent).
   occ = jnp.zeros((GRID, GRID), bool).at[
@@ -124,7 +140,7 @@ def step(key, state, action, life):
   t_ep = state.t_ep + 1
   done = dead | (t_ep >= MAX_LEN)
   reward = jnp.where(dead, 0.0, 1.0)
-  nxt = State(pos, obj_pos, hunger, hp, t_ep, state.t_life + 1)
+  nxt = State(pos, obj_pos, hunger, hp, t_ep, state.t_life + 1, queue)
   fresh = reset(k_reset, state.t_life + 1)
   nxt = jax.tree.map(lambda a, b: jnp.where(done, a, b), fresh, nxt)
   onehot = lambda i: jax.nn.one_hot(i, N_TYPES) * touched_any

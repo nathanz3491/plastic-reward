@@ -14,6 +14,7 @@ lifetimes vmap.
 """
 
 import dataclasses
+import functools
 
 import jax
 import jax.numpy as jnp
@@ -44,6 +45,7 @@ class Config:
   reward_scale: float = 0.1
   flip_lo: float = 0.4        # the flip falls in [lo, hi) of the lifetime
   flip_hi: float = 0.6
+  delay: int = 0              # steps until poison damage lands (env.step)
 
   @property
   def life_steps(self):
@@ -111,7 +113,8 @@ def train_lifetime(cfg, gene, key):
       h=jnp.zeros((cfg.n_envs, cfg.hidden), jnp.float32),
       done=jnp.zeros((cfg.n_envs,), jnp.float32),
       rs=R.init(gene), key=k_run)
-  env_step = jax.vmap(E.step, in_axes=(0, 0, 0, None))
+  env_step = jax.vmap(functools.partial(E.step, delay=cfg.delay),
+                      in_axes=(0, 0, 0, None))
 
   def rollout(c):
     def body(c, _):

@@ -21,6 +21,20 @@ def test_evidence_sign_follows_what_came_after():
   assert float(s[0]) > 0 > float(s[1])
 
 
+def test_an_event_with_no_effect_gets_no_evidence_despite_deaths():
+  # Lane 0: a poison touch, then death. Lane 1: a neutral touch, life goes on.
+  # The neutral touch's outcome equals that of quiet steps, so evidence 0 --
+  # against the all-steps mean the death would have made it look good.
+  rew, ev, done = _batch(T=40, N=2)
+  ev = ev.at[0, 0, 1].set(1.0)
+  done = done.at[2, 0].set(1.0)
+  rew = rew.at[2, 0].set(0.0)
+  ev = ev.at[5, 1, 2].set(1.0)
+  s, n = R.evidence(rew, ev, done, H)
+  assert float(n[2]) == 1.0
+  assert abs(float(s[2])) < 0.3 and float(s[1]) < -1.0
+
+
 def test_evidence_never_reads_past_the_batch():
   rew, ev, done = _batch(T=12)
   ev = ev.at[12 - H + 1, 0, 0].set(1.0)        # its window would end past T

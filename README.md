@@ -35,11 +35,17 @@ external reward only, and against a fixed intrinsic reward.
 ```bash
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt   # Linux/macOS: .venv/bin/python
-.venv/Scripts/python run_stage1.py --lifetimes 6 --updates 200 --envs 64 --out runs/stage1
+.venv/Scripts/python run_stage1.py --delay 15 --out runs/delay15
 ```
 
-This writes `runs/stage1/summary.json`, `logs.npz` and `stage1.png`. On CPU
-it takes about 40 minutes; the run uses JAX and goes faster on a GPU.
+This runs 16 lifetimes per arm: external-only, fixed taste, and plastic taste
+at strength 1, 3 and 10 (`--arms` picks a subset). Options:
+- `--delay N` makes poison damage land N steps after eating.
+- `--flip-lo` / `--flip-hi` set when the flip falls, as fractions of life.
+
+It writes `summary.json` (mean ± SE per arm, with a paired difference against
+external-only), `logs.npz` and `stage1.png`. It runs on CPU, but a GPU is much
+faster.
 
 ## Test
 

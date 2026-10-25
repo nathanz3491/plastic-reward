@@ -12,7 +12,7 @@ def _life(roles=(0, 1, 2), flip=1000):
 def _state(pos, obj_cells, hunger=10, hp=E.HP_MAX, t_ep=0, t_life=0):
   return E.State(jnp.array(pos, jnp.int32), jnp.array(obj_cells, jnp.int32),
                  jnp.int32(hunger), jnp.int32(hp), jnp.int32(t_ep),
-                 jnp.int32(t_life))
+                 jnp.int32(t_life), jnp.zeros((E.QLEN,), jnp.int32))
 
 
 # Types are laid out A A A B B B C C C; put one of each type right of (4, 4).
@@ -55,6 +55,20 @@ def test_food_feeds_poison_hurts_neutral_does_nothing():
     assert float(r) == 1.0 and not bool(done)
     # The consumed object moved, and not under the agent.
     assert not bool(jnp.all(s2.obj_pos[first] == jnp.array([4, 5])))
+
+
+def test_delayed_poison_lands_exactly_delay_steps_later():
+  life = _life((0, 1, 2))                            # B is poison
+  delay = 5
+  s = _state([4, 4], _objs(3))
+  _, s, *_ = E.step(jax.random.PRNGKey(5), s, 4, life, delay=delay)
+  hps = [int(s.hp)]
+  for k in range(delay):
+    _, s, *_ = E.step(jax.random.PRNGKey(6 + k), s, 0, life, delay=delay)
+    hps.append(int(s.hp))
+  # Unhurt at eating and for delay-1 more steps; the damage lands on step delay.
+  assert hps[:delay] == [E.HP_MAX] * delay
+  assert hps[delay] == E.HP_MAX - E.POISON_DMG
 
 
 def test_flip_changes_what_the_same_type_does():
