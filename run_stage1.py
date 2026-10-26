@@ -46,7 +46,7 @@ BEFORE = 60           # aligned plots show this many batches before the flip
 
 
 def run_arm(cfg, arm, keys):
-  gene = R.make_gene(3, **arm['gene'])
+  gene = R.make_gene(cfg.n_events, **arm['gene'])
   c = dataclasses.replace(cfg, lam=arm['lam'])
   fn = jax.jit(jax.vmap(lambda k: ppo.train_lifetime(c, gene, k)))
   logs, life = fn(keys)
@@ -83,7 +83,7 @@ def plot(results, cfg, path, title):
   palette = dict(external='#52514e', fixed1='#9ab8e0', fixed3='#2a78d6',
                  plastic1='#f2c27a', plastic3='#e8a33d', plastic10='#b5651d',
                  averse1='#8fd19e', averse3='#1baf7a')
-  after = int(cfg.n_updates * (1 - cfg.flip_hi))
+  after = int(cfg.n_updates * (1 - cfg.flips[0][1]))
   x = np.arange(-BEFORE, after)
   fig, ax = plt.subplots(1, 3, figsize=(16, 4.2))
   for a in ax:
@@ -127,8 +127,8 @@ def main():
   ap.add_argument('--seed', type=int, default=0)
   ap.add_argument('--out', default='runs/stage1')
   args = ap.parse_args()
-  cfg = ppo.Config(n_envs=args.envs, n_updates=args.updates, delay=args.delay,
-                   flip_lo=args.flip_lo, flip_hi=args.flip_hi)
+  cfg = ppo.Config(n_envs=args.envs, n_updates=args.updates,
+                   delays=(args.delay,), flips=((args.flip_lo, args.flip_hi),))
   out = pathlib.Path(args.out)
   out.mkdir(parents=True, exist_ok=True)
   keys = jax.random.split(jax.random.PRNGKey(args.seed), args.lifetimes)

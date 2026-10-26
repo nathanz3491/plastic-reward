@@ -14,7 +14,6 @@ lifetimes vmap.
 """
 
 import dataclasses
-import functools
 
 import jax
 import jax.numpy as jnp
@@ -43,25 +42,45 @@ class Config:
   # Learning reward is scaled for PPO only: at +1 per step, returns of 20-100
   # made the value loss swamp the policy loss under gradient clipping.
   reward_scale: float = 0.1
-  flip_lo: float = 0.4        # the flip falls in [lo, hi) of the lifetime
-  flip_hi: float = 0.6
-  delay: int = 0              # steps until poison damage lands (env.step)
+  # One (lo, hi) window per flip, as fractions of the lifetime; two windows
+  # make an A -> B -> A lifetime.
+  flips: tuple = ((0.4, 0.6),)
+  delays: tuple = (0,)        # each lifetime's poison delay is drawn from these
+  # Control: give each event type the evidence of a randomly chosen type, so
+  # taste still moves as much but no longer about the right object.
+  shuffle_evidence: bool = False
+  n_types: int = 3            # object types (= taste event types)
+  per_type: int = 3           # objects of each type in the grid
+  n_buttons: int = 0          # extra actions with lifetime roles (env.World)
+  # What taste is about: 'objects' (touching each object type) or 'buttons'
+  # (pressing each button) -- the latter is the action-level taste a
+  # knowledge-free action mask would need.
+  events: str = 'objects'
 
   @property
   def life_steps(self):
     return self.n_steps * self.n_updates
 
+  @property
+  def world(self):
+    return E.World(self.n_types, self.per_type, self.n_buttons)
+
+  @property
+  def n_events(self):
+    assert self.events in ('objects', 'buttons'), self.events
+    return self.n_types if self.events == 'objects' else self.n_buttons
+
 
 # --- network -------------------------------------------------------------------
-def init_params(key, hidden):
+def init_params(key, hidden, obs_dim, n_actions):
   ks = jax.random.split(key, 5)
   orth = lambda k, shape, s: jax.nn.initializers.orthogonal(s)(k, shape)
   z = lambda n: jnp.zeros((n,), jnp.float32)
   return dict(
-      w1=orth(ks[0], (E.OBS_DIM, hidden), jnp.sqrt(2.0)), b1=z(hidden),
+      w1=orth(ks[0], (obs_dim, hidden), jnp.sqrt(2.0)), b1=z(hidden),
       wzr=orth(ks[1], (2 * hidden, 2 * hidden), 1.0), bzr=z(2 * hidden),
       wh=orth(ks[2], (2 * hidden, hidden), 1.0), bh=z(hidden),
-      wa=orth(ks[3], (hidden, E.N_ACTIONS), 0.01), ba=z(E.N_ACTIONS),
+      wa=orth(ks[3], (hidden, n_actions), 0.01), ba=z(n_actions),
       wc=orth(ks[4], (hidden, 1), 1.0), bc=z(1))
 
 
@@ -102,18 +121,20 @@ def gae(cfg, rew, val, done, last_val):
 def train_lifetime(cfg, gene, key):
   """Returns per-batch logs (n_updates, ...) and the lifetime's world rules."""
   k_life, k_net, k_env, k_run = jax.random.split(key, 4)
-  life = E.sample_lifetime(k_life, int(cfg.flip_lo * cfg.life_steps),
-                           int(cfg.flip_hi * cfg.life_steps))
-  params = init_params(k_net, cfg.hidden)
+  life = E.sample_lifetime(
+      k_life, tuple((int(lo * cfg.life_steps), int(hi * cfg.life_steps))
+                    for lo, hi in cfg.flips), cfg.delays, cfg.world)
+  params = init_params(k_net, cfg.hidden, cfg.world.obs_dim, cfg.world.n_actions)
   opt = optax.chain(optax.clip_by_global_norm(0.5), optax.adam(cfg.lr, eps=1e-5))
-  states = jax.vmap(E.reset)(jax.random.split(k_env, cfg.n_envs))
+  states = jax.vmap(lambda k: E.reset(k, world=cfg.world))(
+      jax.random.split(k_env, cfg.n_envs))
   carry = dict(
       params=params, opt=opt.init(params), states=states,
-      obs=jax.vmap(E.observe)(states),
+      obs=jax.vmap(lambda s: E.observe(s, cfg.world))(states),
       h=jnp.zeros((cfg.n_envs, cfg.hidden), jnp.float32),
       done=jnp.zeros((cfg.n_envs,), jnp.float32),
       rs=R.init(gene), key=k_run)
-  env_step = jax.vmap(functools.partial(E.step, delay=cfg.delay),
+  env_step = jax.vmap(lambda k, s, a, l: E.step(k, s, a, l, cfg.world),
                       in_axes=(0, 0, 0, None))
 
   def rollout(c):
@@ -122,11 +143,13 @@ def train_lifetime(cfg, gene, key):
       h, logits, value = net(c['params'], c['h'], c['obs'], c['done'])
       action = jax.random.categorical(k_act, logits)
       logp = jax.nn.log_softmax(logits)[jnp.arange(cfg.n_envs), action]
-      obs, states, rew, done, dead, touched, role = env_step(
+      obs, states, rew, done, dead, touched, role, info = env_step(
           jax.random.split(k_env, cfg.n_envs), c['states'], action, life)
       out = dict(obs=c['obs'], done_prev=c['done'], action=action, logp=logp,
                  value=value, reward=rew, done=done.astype(jnp.float32),
-                 dead=dead, touched=touched, role=role)
+                 dead=dead, touched=touched, role=role,
+                 events=touched if cfg.events == 'objects' else info['pressed'],
+                 press_role=info['press_role'], worked=info['worked'])
       c = {**c, 'key': key, 'h': h, 'obs': obs, 'states': states,
            'done': done.astype(jnp.float32)}
       return c, out
@@ -171,25 +194,34 @@ def train_lifetime(cfg, gene, key):
     h0 = c['h']
     c, b = rollout(c)
     _, _, last_val = net(c['params'], c['h'], c['obs'], c['done'])
-    r_int = R.intrinsic(c['rs'].w, b['touched'])
+    r_int = R.intrinsic(c['rs'].w, b['events'])
     rew = cfg.reward_scale * (b['reward'] + cfg.lam * gene.lam * r_int)
     adv, ret = gae(cfg, rew, b['value'], b['done'], last_val)
-    key, k_ppo = jax.random.split(c['key'])
+    key, k_ppo, k_shuf = jax.random.split(c['key'], 3)
     params, opt_state = ppo(c['params'], c['opt'], h0, b, adv, ret, k_ppo)
-    ev_sum, ev_n = R.evidence(b['reward'], b['touched'], b['done'], cfg.horizon)
+    ev_sum, ev_n = R.evidence(b['reward'], b['events'], b['done'], cfg.horizon)
+    if cfg.shuffle_evidence:
+      src = jax.random.randint(k_shuf, ev_sum.shape, 0, ev_sum.shape[0])
+      ev_sum, ev_n = ev_sum[src], ev_n[src]
     rs = R.update(gene, c['rs'], ev_sum, ev_n, cfg.horizon)
     t_life = c['states'].t_life[0]
-    roles = E.roles_at(life, t_life)
+    roles_now = (E.roles_at if cfg.events == 'objects' else E.button_roles_at)
+    by_role = jax.nn.one_hot(roles_now(life, t_life), E.N_ROLES)
     log = dict(
         reward=b['reward'].mean(),                  # external, per step
         deaths=b['dead'].sum() / cfg.n_envs,        # per lane per batch
         # steps per ended episode: the lifespan, the readable form of survival
         lifespan=cfg.n_steps * cfg.n_envs / jnp.maximum(b['done'].sum(), 1.0),
         touch_role=b['role'].mean((0, 1)),          # food, poison, neutral
+        press_role=b['press_role'].mean((0, 1)),    # good, harm, null buttons
+        worked=b['worked'].mean(),                  # good presses that fed
         w=rs.w, eff=rs.eff,
-        w_role=jnp.zeros_like(rs.w).at[roles].set(rs.w),
-        eff_role=jnp.zeros_like(rs.eff).at[roles].set(rs.eff),
-        flipped=t_life >= life.flip_step)
+        # mean taste and evidence over the types holding each role right now
+        w_role=by_role.T @ rs.w / jnp.maximum(by_role.sum(0), 1.0),
+        eff_role=by_role.T @ rs.eff / jnp.maximum(by_role.sum(0), 1.0),
+        flips_passed=E.flips_passed(life, t_life),
+        flipped=t_life >= life.flips[0],            # the first flip is behind
+        delay=life.delay)
     c = {**c, 'params': params, 'opt': opt_state, 'rs': rs, 'key': key}
     return c, log
 

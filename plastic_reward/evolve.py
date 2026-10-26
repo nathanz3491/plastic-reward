@@ -24,16 +24,15 @@ import jax.numpy as jnp
 from plastic_reward import ppo
 from plastic_reward import reward as R
 
-N_EVENTS = 3
 NAMES = ('w0', 'alpha', 'rho', 'pos', 'neg', 'decay', 'lam')
 
 
-def decode(theta):
-  """(..., 7) genome -> Gene (batched over leading axes)."""
+def decode(theta, n_events=3):
+  """(..., 7) genome -> Gene (batched over leading axes); one taste per event."""
   t = jnp.asarray(theta, jnp.float32)
   w0 = jnp.tanh(t[..., 0])
   return R.Gene(
-      w0=jnp.broadcast_to(w0[..., None], t.shape[:-1] + (N_EVENTS,)),
+      w0=jnp.broadcast_to(w0[..., None], t.shape[:-1] + (n_events,)),
       alpha=jnp.exp(t[..., 1]),
       rho=0.2 * jax.nn.sigmoid(t[..., 2]),
       pos=jnp.exp(t[..., 3]),
@@ -70,7 +69,8 @@ def make_evaluator(cfg, lifetimes, chunk):
   """genomes (P, 7), key -> fitness (P,), mean lifespan over each lifetime."""
   def one(theta, key):
     keys = jax.random.split(key, lifetimes)
-    logs = jax.vmap(lambda k: ppo.train_lifetime(cfg, decode(theta), k)[0])(keys)
+    gene = decode(theta, cfg.n_events)
+    logs = jax.vmap(lambda k: ppo.train_lifetime(cfg, gene, k)[0])(keys)
     return logs['lifespan'].mean()
   run = jax.jit(jax.vmap(one, in_axes=(0, None)))
 

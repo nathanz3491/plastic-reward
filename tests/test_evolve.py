@@ -40,7 +40,7 @@ def test_describe_reports_the_asymmetry():
 
 def test_evaluator_scores_a_small_population():
   cfg = ppo.Config(n_envs=8, n_steps=16, n_updates=3, minibatches=2,
-                   hidden=16, horizon=8, delay=4)
+                   hidden=16, horizon=8, delays=(0, 4), flips=((0.2, 0.4), (0.6, 0.8)))
   evaluate = EV.make_evaluator(cfg, lifetimes=2, chunk=2)
   fit = evaluate(EV.random_genomes(np.random.default_rng(3), 3),
                  jax.random.PRNGKey(0))

@@ -66,6 +66,21 @@ The run has four steps:
 It takes about 75 minutes on an RTX 4090 and writes `history.json`,
 `champions.json`, `test.json` and `stage2.png`.
 
+## Stage 3: do evolved rules generalise?
+
+```bash
+.venv/Scripts/python run_stage2.py --out runs/box/mix0 --delays 0,8,15,25 --flips 3 --no-random
+.venv/Scripts/python run_stage3_test.py --help
+```
+
+Stage 3 evolves rules across mixed worlds (several poison delays, A -> B -> A
+flips, up to 6 object types, optional action-level "buttons") and tests them
+on unseen delays, flip counts and brain sizes. An evidence-shuffled control
+separates learning which object is good from a fixed wary attitude. Findings
+are in `docs/results-stage3.md` (3 types: learners generalise) and
+`docs/results-stage3b.md` (6 types: learners win big at home but are
+specialists that break off-niche).
+
 ## Test
 
 ```bash
@@ -83,5 +98,8 @@ run that also checks that lifetimes vmap.
 | `plastic_reward/env.py` | the foraging-with-flip environment (pure JAX) |
 | `plastic_reward/reward.py` | bounded memory, evidence, the gene-controlled update rule |
 | `plastic_reward/ppo.py` | PPO + GRU; one jit per lifetime |
+| `plastic_reward/evolve.py` | genome, decoding and the evolutionary search |
 | `run_stage1.py` | the three-arm stage-1 comparison |
+| `run_stage2.py` | evolution (stages 2-3) against a random-search control |
+| `run_stage3_test.py` | paired test of champions across unseen worlds |
 | `requirements.txt` / `requirements.lock` | pinned and fully frozen dependencies |

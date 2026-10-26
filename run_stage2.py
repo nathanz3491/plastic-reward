@@ -97,8 +97,9 @@ def plot(evo_h, rnd_h, table, path):
   ax[0].plot(g, [h['best'] for h in evo_h], color='#1baf7a', label='evolution: best')
   ax[0].plot(g, [h['mean'] for h in evo_h], color='#1baf7a', ls=':',
              label='evolution: population mean')
-  ax[0].plot(g, np.maximum.accumulate([h['best'] for h in rnd_h]),
-             color='#52514e', label='random search: best so far')
+  if rnd_h:
+    ax[0].plot(g, np.maximum.accumulate([h['best'] for h in rnd_h]),
+               color='#52514e', label='random search: best so far')
   ax[0].set(title='fitness (mean lifespan over a lifetime)', xlabel='generation')
   ax[0].legend(frameon=False, fontsize=8)
   for k, c in (('neg_over_pos', '#b5651d'), ('decay', '#2a78d6'), ('lam', '#8a5cd6')):
@@ -132,7 +133,20 @@ def main():
   ap.add_argument('--elites', type=int, default=4)
   ap.add_argument('--immigrants', type=int, default=2)
   ap.add_argument('--sigma', type=float, default=0.3)
-  ap.add_argument('--delay', type=int, default=15)
+  ap.add_argument('--delays', default='15',
+                  help='poison delays lifetimes are drawn from, e.g. 0,8,15,25')
+  ap.add_argument('--flips', default='0.3-0.4',
+                  help='flip windows as fractions of life, e.g. 0.25-0.35,0.6-0.7')
+  ap.add_argument('--shuffle-evidence', action='store_true',
+                  help='control: evidence goes to a random event type')
+  ap.add_argument('--no-random', action='store_true', help='skip random search')
+  ap.add_argument('--types', type=int, default=3, help='object types in the world')
+  ap.add_argument('--per-type', type=int, default=3, help='objects of each type')
+  ap.add_argument('--buttons', type=int, default=0, help='extra button actions')
+  ap.add_argument('--events', default='objects', choices=('objects', 'buttons'),
+                  help='what taste is about')
+  ap.add_argument('--skip-test', action='store_true',
+                  help='stop after choosing the champion (stage 3 tests apart)')
   ap.add_argument('--updates', type=int, default=300)
   ap.add_argument('--envs', type=int, default=64)
   ap.add_argument('--chunk', type=int, default=8, help='genomes per GPU batch')
@@ -143,12 +157,18 @@ def main():
   args = ap.parse_args()
   out = pathlib.Path(args.out)
   out.mkdir(parents=True, exist_ok=True)
-  cfg = ppo.Config(n_envs=args.envs, n_updates=args.updates, delay=args.delay,
-                   flip_lo=0.3, flip_hi=0.4)
+  cfg = ppo.Config(
+      n_envs=args.envs, n_updates=args.updates,
+      delays=tuple(int(d) for d in args.delays.split(',')),
+      flips=tuple(tuple(float(x) for x in w.split('-'))
+                  for w in args.flips.split(',')),
+      shuffle_evidence=args.shuffle_evidence, n_types=args.types,
+      per_type=args.per_type, n_buttons=args.buttons, events=args.events)
   evaluate = EV.make_evaluator(cfg, args.lifetimes, args.chunk)
 
   evo_h, evo_pool = search(evaluate, np.random.default_rng(args.seed), args, True)
-  rnd_h, rnd_pool = search(evaluate, np.random.default_rng(args.seed + 1), args, False)
+  rnd_h, rnd_pool = ([], []) if args.no_random else search(
+      evaluate, np.random.default_rng(args.seed + 1), args, False)
   (out / 'history.json').write_text(json.dumps(dict(
       evolution=evo_h, random_search=rnd_h, args=vars(args)), indent=1))
 
@@ -156,19 +176,26 @@ def main():
     return [g for _, g in sorted(pool, key=lambda p: -p[0])[:args.finalists]]
   pick_eval = EV.make_evaluator(cfg, 8, args.chunk)
   evo_champ, evo_fit = pick_champion(pick_eval, top(evo_pool), args)
-  rnd_champ, rnd_fit = pick_champion(pick_eval, top(rnd_pool), args)
   champions = dict(evolved=EV.describe(evo_champ), evolved_finalists=evo_fit,
-                   random_search=EV.describe(rnd_champ),
-                   random_finalists=rnd_fit, hand_set=HAND_SET)
+                   hand_set=HAND_SET, config=dataclasses.asdict(cfg))
+  n = cfg.n_events
+  genes = dict(external=R.make_gene(n, lam=0.0),
+               hand_set=R.make_gene(n, **HAND_SET),
+               evolved=EV.decode(evo_champ, n))
+  if rnd_pool:
+    rnd_champ, rnd_fit = pick_champion(pick_eval, top(rnd_pool), args)
+    champions.update(random_search=EV.describe(rnd_champ),
+                     random_finalists=rnd_fit)
+    genes['random_search'] = EV.decode(rnd_champ, n)
   (out / 'champions.json').write_text(json.dumps(champions, indent=1))
   print('champions', json.dumps(champions), flush=True)
+  if args.skip_test:
+    print('wrote', out)
+    return
 
-  genes = dict(external=R.make_gene(3, lam=0.0),
-               hand_set=R.make_gene(3, **HAND_SET),
-               evolved=EV.decode(evo_champ), random_search=EV.decode(rnd_champ))
   table = {}
   for d in TEST_DELAYS:
-    res = test(dataclasses.replace(cfg, delay=d), genes, args.test_lifetimes,
+    res = test(dataclasses.replace(cfg, delays=(d,)), genes, args.test_lifetimes,
                seed=args.seed + 9_999)
     table[d] = {}
     for name, r in res.items():
