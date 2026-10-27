@@ -6,6 +6,24 @@ All notable changes are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Taste over actions, fixed:**
+  - `Config.taste_as = 'prior'` makes taste a bias on the button logits
+    instead of a reward;
+  - `Config.evidence = 'advantage'` judges each event by the external-reward
+    advantage, so each state is its own baseline;
+  - `Config.optimism` sets what the policy sees once evidence has faded.
+
+  The runner flags are `--taste-as`, `--evidence` and `--optimism`. In a first
+  check over 8 lifetimes, the hand-set rule went from −65 to +9, and the
+  prior is what fixes it.
+- **Buttons result** (`docs/results-buttons.md`): taste over actions, added as
+  reward, does not help.
+  - Evolution switches it off (≈ no taste).
+  - Hand-set and object-evolved rules cost 40-80 lifespan.
+  - The diagnostic finds three failure modes:
+    - a farmable reward on a free action;
+    - an avoidance trap where disliked buttons are never retried;
+    - evidence confounded by when the agent chooses to press.
 - **Buttons: taste over actions** (`World.n_buttons`, `Config.events =
   'buttons'`). These are extra actions with per-lifetime roles:
   - GOOD acts like eating, but only next to an object (otherwise it does

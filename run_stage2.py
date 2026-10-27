@@ -145,6 +145,12 @@ def main():
   ap.add_argument('--buttons', type=int, default=0, help='extra button actions')
   ap.add_argument('--events', default='objects', choices=('objects', 'buttons'),
                   help='what taste is about')
+  ap.add_argument('--evidence', default='window', choices=('window', 'advantage'),
+                  help='how taste is judged (ppo.Config.evidence)')
+  ap.add_argument('--taste-as', default='reward', choices=('reward', 'prior'),
+                  help='how taste acts (ppo.Config.taste_as)')
+  ap.add_argument('--optimism', type=float, default=0.0,
+                  help='prior where evidence has faded (ppo.Config.optimism)')
   ap.add_argument('--skip-test', action='store_true',
                   help='stop after choosing the champion (stage 3 tests apart)')
   ap.add_argument('--updates', type=int, default=300)
@@ -163,7 +169,8 @@ def main():
       flips=tuple(tuple(float(x) for x in w.split('-'))
                   for w in args.flips.split(',')),
       shuffle_evidence=args.shuffle_evidence, n_types=args.types,
-      per_type=args.per_type, n_buttons=args.buttons, events=args.events)
+      per_type=args.per_type, n_buttons=args.buttons, events=args.events,
+      evidence=args.evidence, taste_as=args.taste_as, optimism=args.optimism)
   evaluate = EV.make_evaluator(cfg, args.lifetimes, args.chunk)
 
   evo_h, evo_pool = search(evaluate, np.random.default_rng(args.seed), args, True)

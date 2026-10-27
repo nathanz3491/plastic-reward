@@ -79,6 +79,12 @@ def main():
   ap.add_argument('--buttons', type=int, default=0, help='extra button actions')
   ap.add_argument('--events', default='objects', choices=('objects', 'buttons'),
                   help='what taste is about')
+  ap.add_argument('--evidence', default='window', choices=('window', 'advantage'),
+                  help='how taste is judged (ppo.Config.evidence)')
+  ap.add_argument('--taste-as', default='reward', choices=('reward', 'prior'),
+                  help='how taste acts (ppo.Config.taste_as)')
+  ap.add_argument('--optimism', type=float, default=0.0,
+                  help='prior where evidence has faded (ppo.Config.optimism)')
   ap.add_argument('--out', default='runs/stage3_test')
   args = ap.parse_args()
   out = pathlib.Path(args.out)
@@ -86,7 +92,9 @@ def main():
   keys = jax.random.split(jax.random.PRNGKey(args.seed), args.lifetimes)
   base = ppo.Config(n_envs=args.envs, n_updates=args.updates,
                     n_types=args.types, per_type=args.per_type,
-                    n_buttons=args.buttons, events=args.events)
+                    n_buttons=args.buttons, events=args.events,
+                    evidence=args.evidence, taste_as=args.taste_as,
+                    optimism=args.optimism)
   genes = candidates(args.champions, base.n_events)
 
   table = {}

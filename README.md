@@ -81,6 +81,11 @@ are in `docs/results-stage3.md` (3 types: learners generalise) and
 `docs/results-stage3b.md` (6 types: learners win big at home but are
 specialists that break off-niche).
 
+Taste over **actions** (`--buttons 4 --events buttons`) fails as a reward: a
+free action's reward can be farmed. It works as a **logit prior**
+(`--taste-as prior`, optionally `--evidence advantage`). See
+`docs/results-buttons.md`.
+
 ## Test
 
 ```bash

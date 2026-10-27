@@ -99,3 +99,19 @@ def test_relaxation_pulls_w_back_to_birth():
 
 def test_intrinsic_is_clipped():
   assert float(R.intrinsic(jnp.array([5.0, 0, 0]), jnp.array([1.0, 0, 0]))) == 1.0
+
+
+def test_advantage_evidence_sums_the_advantage_at_each_event():
+  adv = jnp.array([[1.0, -2.0], [3.0, 0.5]])                    # (T=2, N=2)
+  events = jnp.zeros((2, 2, 3)).at[0, 0, 0].set(1).at[1, 0, 0].set(1) \
+                               .at[0, 1, 2].set(1)
+  s, n = R.advantage_evidence(adv, events)
+  np.testing.assert_allclose(np.asarray(s), [4.0, 0.0, -2.0])
+  np.testing.assert_allclose(np.asarray(n), [2.0, 0.0, 1.0])
+
+
+def test_shown_taste_falls_back_to_optimism_as_evidence_fades():
+  fresh = R.RewardState(jnp.array([-1.0]), jnp.array([1e6]), jnp.zeros(1))
+  faded = fresh._replace(n=jnp.array([0.0]))
+  assert float(R.shown(fresh, 0.5)[0]) < -0.99
+  assert float(R.shown(faded, 0.5)[0]) == 0.5

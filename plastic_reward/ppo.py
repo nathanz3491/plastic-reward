@@ -2,7 +2,8 @@
 
 Per interaction batch, in this order (docs/plan.md, section 7):
   1. w is fixed for the batch; collect fresh experience with it;
-  2. update the policy on reward = external + lam * intrinsic(w);
+  2. update the policy on reward = external + lam * intrinsic(w) (or, with
+     Config.taste_as='prior', on external reward with w as a button logit bias);
   3. fold the batch into the bounded memory;
   4. revise w from the evidence (the Gene's rule).
 PPO's epochs reuse one batch; they are not new experience and never revise w.
@@ -56,6 +57,17 @@ class Config:
   # (pressing each button) -- the latter is the action-level taste a
   # knowledge-free action mask would need.
   events: str = 'objects'
+  # How taste is judged: 'window' (return over the next `horizon` steps
+  # against quiet steps) or 'advantage' (external-reward GAE advantage: what
+  # followed minus what the critic expected from that state).
+  evidence: str = 'window'
+  # How taste acts: 'reward' (intrinsic reward when the event happens) or
+  # 'prior' (buttons only: a bias added to the button logits, which cannot be
+  # farmed the way a reward on a free action can).
+  taste_as: str = 'reward'
+  # With taste_as='prior', what the policy sees where evidence has faded
+  # (reward.shown): 0 leans neither way, > 0 retries avoided actions.
+  optimism: float = 0.0
 
   @property
   def life_steps(self):
@@ -68,6 +80,10 @@ class Config:
   @property
   def n_events(self):
     assert self.events in ('objects', 'buttons'), self.events
+    assert self.evidence in ('window', 'advantage'), self.evidence
+    assert self.taste_as in ('reward', 'prior'), self.taste_as
+    assert self.taste_as == 'reward' or self.events == 'buttons', \
+        'a taste prior is over actions, so it needs events=buttons'
     return self.n_types if self.events == 'objects' else self.n_buttons
 
 
@@ -137,10 +153,18 @@ def train_lifetime(cfg, gene, key):
   env_step = jax.vmap(lambda k, s, a, l: E.step(k, s, a, l, cfg.world),
                       in_axes=(0, 0, 0, None))
 
-  def rollout(c):
+  def action_bias(rs):
+    """(n_actions,) taste as a logit prior on the buttons; zero otherwise."""
+    if cfg.taste_as == 'reward':
+      return jnp.zeros((cfg.world.n_actions,), jnp.float32)
+    lean = cfg.lam * gene.lam * R.shown(rs, cfg.optimism)
+    return jnp.concatenate([jnp.zeros((E.N_MOVES,), jnp.float32), lean])
+
+  def rollout(c, bias):
     def body(c, _):
       key, k_act, k_env = jax.random.split(c['key'], 3)
       h, logits, value = net(c['params'], c['h'], c['obs'], c['done'])
+      logits = logits + bias
       action = jax.random.categorical(k_act, logits)
       logp = jax.nn.log_softmax(logits)[jnp.arange(cfg.n_envs), action]
       obs, states, rew, done, dead, touched, role, info = env_step(
@@ -155,9 +179,10 @@ def train_lifetime(cfg, gene, key):
       return c, out
     return jax.lax.scan(body, c, None, cfg.n_steps)
 
-  def ppo(params, opt_state, h0, batch, adv, ret, key):
+  def ppo(params, opt_state, h0, batch, adv, ret, key, bias):
     def loss_fn(p, mb):
       logits, values = unroll(p, mb['h0'], mb['obs'], mb['done_prev'])
+      logits = logits + bias       # the policy acted with this prior
       logp_all = jax.nn.log_softmax(logits)
       logp = jnp.take_along_axis(logp_all, mb['action'][..., None], -1)[..., 0]
       ratio = jnp.exp(logp - mb['logp'])
@@ -192,14 +217,25 @@ def train_lifetime(cfg, gene, key):
 
   def one_batch(c, _):
     h0 = c['h']
-    c, b = rollout(c)
+    bias = action_bias(c['rs'])
+    c, b = rollout(c, bias)
     _, _, last_val = net(c['params'], c['h'], c['obs'], c['done'])
-    r_int = R.intrinsic(c['rs'].w, b['events'])
-    rew = cfg.reward_scale * (b['reward'] + cfg.lam * gene.lam * r_int)
+    rew = cfg.reward_scale * b['reward']
+    if cfg.taste_as == 'reward':
+      r_int = R.intrinsic(c['rs'].w, b['events'])
+      rew = rew + cfg.reward_scale * cfg.lam * gene.lam * r_int
     adv, ret = gae(cfg, rew, b['value'], b['done'], last_val)
     key, k_ppo, k_shuf = jax.random.split(c['key'], 3)
-    params, opt_state = ppo(c['params'], c['opt'], h0, b, adv, ret, k_ppo)
-    ev_sum, ev_n = R.evidence(b['reward'], b['events'], b['done'], cfg.horizon)
+    params, opt_state = ppo(c['params'], c['opt'], h0, b, adv, ret, k_ppo, bias)
+    if cfg.evidence == 'window':
+      ev_sum, ev_n = R.evidence(b['reward'], b['events'], b['done'], cfg.horizon)
+    else:
+      # External-only advantage, in steps of survival. With taste as a prior
+      # this is `adv` itself; with taste as reward the critic also predicts
+      # taste, so the baseline is only approximate.
+      adv_ext = adv if cfg.taste_as == 'prior' else gae(
+          cfg, cfg.reward_scale * b['reward'], b['value'], b['done'], last_val)[0]
+      ev_sum, ev_n = R.advantage_evidence(adv_ext / cfg.reward_scale, b['events'])
     if cfg.shuffle_evidence:
       src = jax.random.randint(k_shuf, ev_sum.shape, 0, ev_sum.shape[0])
       ev_sum, ev_n = ev_sum[src], ev_n[src]
@@ -219,6 +255,8 @@ def train_lifetime(cfg, gene, key):
         # mean taste and evidence over the types holding each role right now
         w_role=by_role.T @ rs.w / jnp.maximum(by_role.sum(0), 1.0),
         eff_role=by_role.T @ rs.eff / jnp.maximum(by_role.sum(0), 1.0),
+        shown_role=by_role.T @ R.shown(rs, cfg.optimism)
+        / jnp.maximum(by_role.sum(0), 1.0),
         flips_passed=E.flips_passed(life, t_life),
         flipped=t_life >= life.flips[0],            # the first flip is behind
         delay=life.delay)

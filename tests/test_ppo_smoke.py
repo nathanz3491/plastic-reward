@@ -44,3 +44,23 @@ def test_lifetimes_vmap():
   run = jax.jit(jax.vmap(lambda k: ppo.train_lifetime(CFG, gene, k)[0]))
   logs = run(jax.random.split(jax.random.PRNGKey(1), 2))
   assert logs['reward'].shape == (2, 3)
+
+
+def test_taste_as_prior_with_advantage_evidence_runs():
+  import dataclasses
+  cfg = dataclasses.replace(CFG, n_buttons=4, events='buttons', delays=(3,),
+                            evidence='advantage', taste_as='prior',
+                            optimism=0.2)
+  gene = R.make_gene(cfg.n_events, alpha=0.5, lam=2.0)
+  logs, _ = jax.jit(ppo.train_lifetime, static_argnums=0)(
+      cfg, gene, jax.random.PRNGKey(4))
+  assert logs['shown_role'].shape == (3, 3)
+  for v in logs.values():
+    assert np.isfinite(np.asarray(v, np.float32)).all()
+
+
+def test_a_taste_prior_needs_buttons():
+  import dataclasses
+  import pytest
+  with pytest.raises(AssertionError):
+    _ = dataclasses.replace(CFG, taste_as='prior').n_events

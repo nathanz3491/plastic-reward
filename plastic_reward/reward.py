@@ -2,7 +2,8 @@
 
 Two things are kept apart:
   w     the CURRENT preference -- how much touching each object type pays as
-        intrinsic reward. Changes during a lifetime.
+        intrinsic reward (or, for actions, how much the policy leans towards
+        each one; see `shown`). Changes during a lifetime.
   Gene  the RULE that forms and revises w -- fixed for a lifetime, the thing
         evolution will search over (stage 2). Hand-set in stage 1.
 
@@ -76,6 +77,29 @@ def evidence(reward, events, done, horizon):
                    ret.mean())
   eff = ret - base
   return (ev * eff[..., None]).sum((0, 1)), ev.sum((0, 1))
+
+
+def advantage_evidence(adv, events):
+  """Per event type: summed advantage and count over one batch.
+
+  ``adv`` (T, N) is the external-reward advantage of each step, in steps of
+  survival: what followed, minus what the critic expected from that state. The
+  state is its own baseline here. Against the quiet-step mean, a button
+  pressed mostly in safe moments looked good, even one that does nothing.
+  """
+  ev = events.astype(jnp.float32)
+  return (ev * adv[..., None]).sum((0, 1)), ev.sum((0, 1))
+
+
+def shown(rs, optimism, n0=20.0):
+  """The taste the policy sees: w where evidence is fresh, `optimism` where not.
+
+  Confidence fades with the memory count, so an action that is avoided long
+  enough drifts back to `optimism` and gets tried again. Without this, a
+  disliked action is never retried and its taste never revises.
+  """
+  conf = rs.n / (rs.n + n0)
+  return conf * rs.w + (1.0 - conf) * optimism
 
 
 def update(gene, rs, ev_sum, ev_count, horizon, n0=20.0, wmax=1.0):
